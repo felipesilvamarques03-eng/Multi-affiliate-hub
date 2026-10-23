@@ -1,0 +1,35 @@
+/* Portão de login: usa os mesmos tokens visuais do painel. */
+html,body{margin:0;min-height:100%}
+body{background:var(--bg,#060B26);color:var(--ink,#fff);font-family:'Plus Jakarta Sans',system-ui,-apple-system,'Segoe UI',sans-serif}
+.gate{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px 16px;box-sizing:border-box;background:radial-gradient(900px 500px at 15% 0%,rgba(20,90,255,.24),transparent 60%),radial-gradient(700px 500px at 100% 100%,rgba(117,81,255,.17),transparent 60%),#060B26}
+.gate-box{width:100%;max-width:420px;background:linear-gradient(127deg,rgba(9,14,48,.96) 19%,rgba(13,18,52,.8) 77%);border:1px solid rgba(140,158,230,.16);border-radius:24px;padding:28px 24px;box-shadow:0 30px 80px rgba(0,0,0,.45);box-sizing:border-box}
+.g-brand{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+.g-brand b{display:block;letter-spacing:.06em;text-transform:uppercase;font-size:.86rem}
+.g-brand small{color:#A0AEC0;font-size:.8rem}
+.g-logo{width:42px;height:42px;border-radius:13px;background:#0B6BFF;display:grid;place-items:center;font-weight:800;font-size:1.2rem;box-shadow:0 10px 24px rgba(11,107,255,.35)}
+.gate h1{font-size:1.4rem;margin:0 0 6px}
+.g-sub{color:#A0AEC0;font-size:.9rem;margin:0 0 18px;line-height:1.5}
+.gate form{display:flex;flex-direction:column;gap:12px}
+.gate label{display:flex;flex-direction:column;gap:6px;font-size:.82rem;font-weight:700;color:#D2D8F0}
+.gate input[type=email],.gate input[type=password],.gate input[inputmode]{background:#0E1539;border:1px solid rgba(160,174,192,.28);border-radius:12px;padding:12px 14px;color:#fff;font:inherit;font-size:1rem}
+.gate input:focus{outline:none;border-color:#5AA2FF;box-shadow:0 0 0 3px rgba(11,107,255,.25)}
+.gate input[name=code]{letter-spacing:.4em;font-size:1.3rem;text-align:center;font-family:'IBM Plex Mono',ui-monospace,monospace}
+.g-check{flex-direction:row!important;align-items:center;font-weight:600!important;color:#A0AEC0!important}
+.gate .btn{display:inline-flex;align-items:center;justify-content:center;background:#0B6BFF;color:#fff;border:0;border-radius:12px;padding:12px 16px;font:inherit;font-weight:800;cursor:pointer;box-shadow:0 10px 22px rgba(11,107,255,.32)}
+.gate .btn:disabled{opacity:.6;cursor:default}
+.gate .btn.block{width:100%}
+.g-links{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:16px}
+.g-link{background:none;border:0;color:#5AA2FF;font:inherit;font-size:.86rem;font-weight:700;cursor:pointer;padding:4px 0}
+.gate .msg{min-height:1.2em;font-size:.88rem;margin:10px 0 0}
+.gate .msg.err{color:#FF7272}.gate .msg.ok{color:#2FC98E}
+.g-rules{margin:0;padding-left:18px;font-size:.8rem;color:#A0AEC0}
+.g-rules li.ok{color:#2FC98E}
+.g-qr{display:grid;place-items:center;background:#fff;border-radius:16px;padding:12px;margin-bottom:12px}
+.g-qr img{width:200px;height:200px}
+.g-secret{margin-bottom:14px;font-size:.84rem;color:#A0AEC0}
+.g-secret code{display:block;margin-top:8px;word-break:break-all;background:#0E1539;border-radius:10px;padding:10px;color:#fff;font-family:'IBM Plex Mono',monospace}
+.g-load{display:flex;align-items:center;gap:12px;color:#D2D8F0;padding:20px 0}
+.g-spin{width:20px;height:20px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#5AA2FF;animation:gspin .8s linear infinite}
+@keyframes gspin{to{transform:rotate(360deg)}}
+.g-foot{margin-top:18px;font-size:.76rem;color:#7d8aa6;text-align:center}
+.g-foot a{color:#A0AEC0}
