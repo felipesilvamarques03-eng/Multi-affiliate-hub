@@ -73,6 +73,67 @@ async function ml(deps, token, path, init) {
   return j;
 }
 
+
+// ---------- publicação de anúncios (só depois do [CONFIRMAR] no painel) ----------
+async function mlRaw(deps, token, path, init) {
+  const r = await deps.fetch(API + path, { ...(init || {}), headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', ...((init && init.headers) || {}) } });
+  const j = await r.json().catch(() => null);
+  return { ok: r.ok, status: r.status, j };
+}
+function mlCauses(j) {
+  const out = [];
+  if (j && Array.isArray(j.cause)) j.cause.forEach((c) => { if (c && (c.type === 'error' || !c.type) && c.message) out.push(String(c.message)); });
+  if (!out.length && j && (j.message || j.error)) out.push(String(j.message || j.error));
+  return out.slice(0, 8).map((m) => m.slice(0, 220));
+}
+const ATTR_ALWAYS = ['BRAND', 'MODEL', 'COLOR', 'GTIN', 'EMPTY_GTIN_REASON'];
+function attrOut(a) {
+  const t = a.tags || {};
+  return {
+    id: a.id, nome: a.name || a.id, tipo: a.value_type || 'string',
+    obrigatorio: !!(t.required || t.catalog_required || a.id === 'BRAND' || a.id === 'MODEL'),
+    condicional: !!t.conditional_required, oculto: !!t.hidden,
+    valores: Array.isArray(a.values) ? a.values.slice(0, 80).map((v) => ({ id: String(v.id), nome: v.name })) : [],
+    max: a.value_max_length || null, unidades: Array.isArray(a.allowed_units) ? a.allowed_units.slice(0, 10).map((u) => u.id) : [],
+    dica: a.hint || a.tooltip || '',
+  };
+}
+function cleanText(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, max); }
+function picOk(deps, u) {
+  const supa = envKeys(deps.env).url + '/storage/v1/object/public/vitrine/';
+  return typeof u === 'string' && u.length < 600 && !/[\s"<>]/.test(u) && (u.indexOf(supa) === 0 || u.indexOf(APP_ORIGIN + '/assets/ml/') === 0);
+}
+export function buildItem(deps, it) {
+  const title = cleanText(it.title, 80);
+  if (title.length < 10 || title.length > 60) throw new HttpError(400, 'bad_title', 'O título precisa ter entre 10 e 60 caracteres.');
+  if (!/^MLB\d{3,12}$/.test(String(it.category_id || ''))) throw new HttpError(400, 'bad_category', 'Escolha a categoria.');
+  const price = Math.round(Number(it.price) * 100) / 100;
+  if (!(price >= 5 && price <= 100000)) throw new HttpError(400, 'bad_price', 'Preço inválido.');
+  const qty = Math.floor(Number(it.quantity));
+  if (!(qty >= 1 && qty <= 9999)) throw new HttpError(400, 'bad_qty', 'Informe o estoque (1 a 9999).');
+  const lt = it.listing_type === 'gold_pro' ? 'gold_pro' : 'gold_special';
+  const pics = (Array.isArray(it.pictures) ? it.pictures : []).filter((u) => picOk(deps, u)).slice(0, 10);
+  if (!pics.length) throw new HttpError(400, 'bad_pics', 'Adicione pelo menos a foto principal.');
+  const attrs = [];
+  (Array.isArray(it.attributes) ? it.attributes : []).slice(0, 60).forEach((a) => {
+    const id = String((a && a.id) || '');
+    if (!/^[A-Z0-9_]{2,60}$/.test(id)) return;
+    const vid = a.value_id != null && /^-?\d{1,15}$/.test(String(a.value_id)) ? String(a.value_id) : null;
+    const vname = cleanText(a.value_name, 255);
+    if (!vid && !vname) return;
+    attrs.push(vid ? { id, value_id: vid } : { id, value_name: vname });
+  });
+  const warr = cleanText(it.warranty || '90 dias', 40);
+  const body = {
+    title, category_id: it.category_id, price, currency_id: 'BRL', available_quantity: qty,
+    buying_mode: 'buy_it_now', condition: it.condition === 'used' ? 'used' : 'new', listing_type_id: lt,
+    pictures: pics.map((source) => ({ source })), attributes: attrs,
+    sale_terms: [{ id: 'WARRANTY_TYPE', value_name: 'Garantia do vendedor' }, { id: 'WARRANTY_TIME', value_name: warr }],
+  };
+  const description = cleanText(it.description, 50000);
+  return { body, description };
+}
+
 const n = (v) => (v == null || v === '' || isNaN(Number(v)) ? null : Number(v));
 function order(o) {
   const items = (o.order_items || []).map((it) => ({
@@ -145,6 +206,54 @@ async function api(req, deps, me, b) {
     await db.insert('mah_audit', { owner: me.uid, action: 'ml.answer', detail: { question_id: qid, chars: text.length } });
     return { ok: true, status: (r && r.status) || 'ANSWERED' };
   }
+
+  if (op === 'categorize') {
+    const q = cleanText(b.q, 120);
+    if (q.length < 3) throw new HttpError(400, 'bad_q', 'Escreva o título primeiro.');
+    const j = await ml(deps, token, '/sites/MLB/domain_discovery/search?limit=4&q=' + encodeURIComponent(q));
+    const seen = {}, out = [];
+    (Array.isArray(j) ? j : []).forEach((c) => { if (c && c.category_id && !seen[c.category_id]) { seen[c.category_id] = 1; out.push({ id: c.category_id, nome: c.category_name || c.category_id, dominio: c.domain_name || '' }); } });
+    return { categorias: out };
+  }
+  if (op === 'attributes') {
+    const cid = String(b.category_id || '');
+    if (!/^MLB\d{3,12}$/.test(cid)) throw new HttpError(400, 'bad_category', 'Categoria inválida.');
+    const [cat, at] = await Promise.all([ml(deps, token, '/categories/' + cid), ml(deps, token, '/categories/' + cid + '/attributes')]);
+    const list = (Array.isArray(at) ? at : []).filter((a) => {
+      const t = a.tags || {};
+      if (t.read_only || t.fixed) return false;
+      if (ATTR_ALWAYS.indexOf(a.id) > -1) return true;
+      if (t.hidden) return false;
+      return !!(t.required || t.catalog_required || t.conditional_required);
+    }).map(attrOut);
+    const caminho = Array.isArray(cat && cat.path_from_root) ? cat.path_from_root.map((x) => x.name).join(' › ') : (cat && cat.name) || cid;
+    return { categoria: { id: cid, caminho }, atributos: list };
+  }
+  if (op === 'publish') {
+    if (b.confirm !== true) throw new HttpError(400, 'need_confirm', 'Confirme a publicação antes.');
+    const { body, description } = buildItem(deps, b.item || {});
+    let res = await mlRaw(deps, token, '/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let usedFamily = false;
+    if (!res.ok && res.status === 400 && /family_name/i.test(JSON.stringify(res.j || {}))) {
+      const alt = { ...body, family_name: body.title }; delete alt.title; usedFamily = true;
+      res = await mlRaw(deps, token, '/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(alt) });
+    }
+    if (!res.ok) {
+      if (res.status === 401) throw new HttpError(401, 'ml_reconnect', 'O Mercado Livre recusou o acesso. Conecte de novo.');
+      await db.insert('mah_audit', { owner: me.uid, action: 'ml.publish_fail', detail: { status: res.status, causas: mlCauses(res.j).slice(0, 4) } });
+      const e = new HttpError(res.status === 403 ? 403 : 422, 'ml_rejected', 'O Mercado Livre não aceitou o anúncio.');
+      e.causas = mlCauses(res.j);
+      throw e;
+    }
+    const item = res.j || {};
+    let descOk = true, descErr = '';
+    if (description && item.id) {
+      const d = await mlRaw(deps, token, '/items/' + encodeURIComponent(item.id) + '/description', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plain_text: description }) });
+      if (!d.ok) { descOk = false; descErr = mlCauses(d.j).join(' · '); }
+    }
+    await db.insert('mah_audit', { owner: me.uid, action: 'ml.publish', detail: { item_id: item.id || null, titulo: body.title, preco: body.price, estoque: body.available_quantity, tipo: body.listing_type_id, familia: usedFamily, descricao: descOk } });
+    return { ok: true, id: item.id || null, link: item.permalink || null, status: item.status || '', sub_status: Array.isArray(item.sub_status) ? item.sub_status : [], descricao_ok: descOk, descricao_erro: descErr };
+  }
   throw new HttpError(400, 'bad_op', 'Operação inválida.');
 }
 
@@ -190,7 +299,7 @@ export async function handle(req, deps) {
     }
     return json(req, 404, { erro: 'Rota não encontrada.' });
   } catch (e) {
-    if (e instanceof HttpError) return json(req, e.status, { erro: e.message, codigo: e.code });
+    if (e instanceof HttpError) return json(req, e.status, { erro: e.message, codigo: e.code, ...(e.causas ? { causas: e.causas } : {}) });
     return json(req, 500, { erro: 'Erro inesperado.', codigo: 'internal' });
   }
 }
