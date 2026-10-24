@@ -263,6 +263,7 @@ async function api(req, deps, me, b) {
     }
     if (!res.ok) {
       if (res.status === 401) throw new HttpError(401, 'ml_reconnect', 'O Mercado Livre recusou o acesso. Conecte de novo.');
+      try { console.error('ml_publish', res.status, JSON.stringify(res.j || {}).slice(0, 400)); } catch (_) { /* opcional */ }
       await db.insert('mah_audit', { owner: me.uid, action: 'ml.publish_fail', detail: { status: res.status, causas: mlCauses(res.j).slice(0, 4) } });
       const e = new HttpError(res.status === 403 ? 403 : 422, 'ml_rejected', 'O Mercado Livre não aceitou o anúncio.');
       e.causas = mlCauses(res.j);
@@ -322,7 +323,10 @@ export async function handle(req, deps) {
     }
     return json(req, 404, { erro: 'Rota não encontrada.' });
   } catch (e) {
-    if (e instanceof HttpError) return json(req, e.status, { erro: e.message, codigo: e.code, ...(e.causas ? { causas: e.causas } : {}) });
+    if (e instanceof HttpError) {
+      if (e.status >= 400 && e.code !== 'need_confirm') { try { console.error('mah_err', e.status, e.code, String(e.message).slice(0, 200)); } catch (_) { /* opcional */ } }
+      return json(req, e.status, { erro: e.message, codigo: e.code, ...(e.causas ? { causas: e.causas } : {}) });
+    }
     return json(req, 500, { erro: 'Erro inesperado.', codigo: 'internal' });
   }
 }
