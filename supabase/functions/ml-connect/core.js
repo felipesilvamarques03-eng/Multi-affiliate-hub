@@ -65,6 +65,7 @@ async function ml(deps, token, path, init) {
   const j = await r.json().catch(() => null);
   if (!r.ok) {
     const m = (j && (j.message || j.error)) || ('HTTP ' + r.status);
+    try { console.error('ml_api', path.split('?')[0], r.status, String(m).slice(0, 200)); } catch (_) { /* log opcional */ }
     if (r.status === 401) throw new HttpError(401, 'ml_reconnect', 'O Mercado Livre recusou o acesso. Conecte de novo.');
     if (r.status === 403) throw new HttpError(403, 'ml_forbidden', 'O Mercado Livre não permitiu essa ação (' + String(m).slice(0, 160) + ').');
     if (r.status === 429) throw new HttpError(429, 'ml_rate', 'O Mercado Livre pediu para esperar um pouco.');
@@ -74,6 +75,16 @@ async function ml(deps, token, path, init) {
 }
 
 
+// Rotas públicas do ML (categorias): tenta com o token e, se o ML recusar, sem o token.
+async function mlPublic(deps, token, path) {
+  try { return await ml(deps, token, path); } catch (e) {
+    if (!(e instanceof HttpError) || [401, 403, 404, 502].indexOf(e.status) < 0) throw e;
+    const r = await deps.fetch(API + path, { headers: { Accept: 'application/json' } });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) { try { console.error('ml_public', path.split('?')[0], r.status, JSON.stringify(j || {}).slice(0, 200)); } catch (_) { /* opcional */ } throw new HttpError(502, 'ml_error', 'O Mercado Livre não respondeu a busca de categoria (' + r.status + '). Escolha na lista de categorias.'); }
+    return j;
+  }
+}
 // ---------- publicação de anúncios (só depois do [CONFIRMAR] no painel) ----------
 async function mlRaw(deps, token, path, init) {
   const r = await deps.fetch(API + path, { ...(init || {}), headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', ...((init && init.headers) || {}) } });
@@ -210,15 +221,27 @@ async function api(req, deps, me, b) {
   if (op === 'categorize') {
     const q = cleanText(b.q, 120);
     if (q.length < 3) throw new HttpError(400, 'bad_q', 'Escreva o título primeiro.');
-    const j = await ml(deps, token, '/sites/MLB/domain_discovery/search?limit=4&q=' + encodeURIComponent(q));
+    const j = await mlPublic(deps, token, '/sites/MLB/domain_discovery/search?limit=6&q=' + encodeURIComponent(q));
     const seen = {}, out = [];
     (Array.isArray(j) ? j : []).forEach((c) => { if (c && c.category_id && !seen[c.category_id]) { seen[c.category_id] = 1; out.push({ id: c.category_id, nome: c.category_name || c.category_id, dominio: c.domain_name || '' }); } });
     return { categorias: out };
   }
+  if (op === 'cat_tree') {
+    const id = String(b.id || '');
+    if (!id) {
+      const j = await mlPublic(deps, token, '/sites/MLB/categories');
+      return { id: null, caminho: [], filhos: (Array.isArray(j) ? j : []).map((c) => ({ id: c.id, nome: c.name })), folha: false };
+    }
+    if (!/^MLB\d{3,12}$/.test(id)) throw new HttpError(400, 'bad_category', 'Categoria inválida.');
+    const c = await mlPublic(deps, token, '/categories/' + id);
+    const filhos = Array.isArray(c && c.children_categories) ? c.children_categories.map((x) => ({ id: x.id, nome: x.name })) : [];
+    const caminho = Array.isArray(c && c.path_from_root) ? c.path_from_root.map((x) => ({ id: x.id, nome: x.name })) : [];
+    return { id, nome: (c && c.name) || id, caminho, filhos, folha: !filhos.length };
+  }
   if (op === 'attributes') {
     const cid = String(b.category_id || '');
     if (!/^MLB\d{3,12}$/.test(cid)) throw new HttpError(400, 'bad_category', 'Categoria inválida.');
-    const [cat, at] = await Promise.all([ml(deps, token, '/categories/' + cid), ml(deps, token, '/categories/' + cid + '/attributes')]);
+    const [cat, at] = await Promise.all([mlPublic(deps, token, '/categories/' + cid), mlPublic(deps, token, '/categories/' + cid + '/attributes')]);
     const list = (Array.isArray(at) ? at : []).filter((a) => {
       const t = a.tags || {};
       if (t.read_only || t.fixed) return false;

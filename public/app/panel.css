@@ -740,6 +740,12 @@ pre{background:var(--surface);border:1px solid var(--line);border-radius:12px;pa
 .mlp-pic .acts{display:flex;gap:4px;padding:6px;background:var(--surface);flex-wrap:wrap}
 .mlp-main{position:absolute;left:6px;top:6px;background:var(--accent);color:#fff}
 .mlp-attrs label.f input,.mlp-attrs label.f select{width:100%}
+.mlp-catsearch{display:flex;gap:8px;align-items:end;flex-wrap:wrap}
+.mlp-catsearch label.f input{width:100%}
+.mlp-tree{margin-top:12px;border:1px solid var(--line);border-radius:14px;padding:12px;background:var(--surface)}
+.mlp-crumbs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
+.mlp-tlist{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:340px;overflow:auto}
+.mlp-tlist .btn{justify-content:space-between;white-space:normal;text-align:left}
 .mlp-causas{margin:6px 0 0 18px;color:var(--bad);font-size:.86rem;line-height:1.5}
 @media (max-width:560px){.mlp .two{grid-template-columns:1fr}}
 .ml-q{border:1px solid var(--line);border-radius:14px;padding:12px 14px;background:var(--surface)}
