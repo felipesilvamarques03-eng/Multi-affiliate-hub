@@ -28,3 +28,14 @@
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/app/sw.js"
+  [headers.values]
+    Service-Worker-Allowed = "/app/"
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/app/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
