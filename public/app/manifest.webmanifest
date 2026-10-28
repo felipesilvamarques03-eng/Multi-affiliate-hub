@@ -1,0 +1,17 @@
+{
+  "id": "/app/",
+  "name": "Multi Affiliate Hub · FJ store",
+  "short_name": "Affiliate Hub",
+  "description": "Painel de afiliados e vendas da FJ store (Mercado Livre, Shopee, TikTok Shop e Instagram).",
+  "lang": "pt-BR",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#060B26",
+  "theme_color": "#060B26",
+  "icons": [
+    { "src": "/app/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/app/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/app/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
