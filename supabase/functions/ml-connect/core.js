@@ -148,7 +148,7 @@ export function buildItem(deps, it) {
 const n = (v) => (v == null || v === '' || isNaN(Number(v)) ? null : Number(v));
 function order(o) {
   const items = (o.order_items || []).map((it) => ({
-    titulo: (it.item && it.item.title) || '', item_id: (it.item && it.item.id) || '', qtd: n(it.quantity) || 0,
+    titulo: (it.item && it.item.title) || '', item_id: (it.item && it.item.id) || '', sku: (it.item && (it.item.seller_sku || it.item.seller_custom_field)) || '', qtd: n(it.quantity) || 0,
     preco: n(it.unit_price), tarifa: n(it.sale_fee),
   }));
   return {
@@ -278,7 +278,95 @@ async function api(req, deps, me, b) {
     await db.insert('mah_audit', { owner: me.uid, action: 'ml.publish', detail: { item_id: item.id || null, titulo: body.title, preco: body.price, estoque: body.available_quantity, tipo: body.listing_type_id, familia: usedFamily, descricao: descOk } });
     return { ok: true, id: item.id || null, link: item.permalink || null, status: item.status || '', sub_status: Array.isArray(item.sub_status) ? item.sub_status : [], descricao_ok: descOk, descricao_erro: descErr };
   }
+  // ---------- dropshipping ----------
+  if (op === 'drop_orders') {
+    // Pedidos pagos recentes + situação do envio (para repassar ao fornecedor com a etiqueta do ML).
+    const lim = Math.max(1, Math.min(50, Number(b.limit) || 30));
+    const j = await ml(deps, token, '/orders/search?seller=' + sid + '&sort=date_desc&limit=' + lim);
+    const out = (j.results || []).map(order);
+    const ids = [...new Set(out.map((o) => o.envio_id).filter(Boolean))].slice(0, 30);
+    const ship = {};
+    for (let i = 0; i < ids.length; i += 6) {
+      await Promise.all(ids.slice(i, i + 6).map(async (id) => {
+        try {
+          const s = await ml(deps, token, '/shipments/' + id, { headers: { 'x-format-new': 'true' } });
+          let custo = null;
+          try { const c = await ml(deps, token, '/shipments/' + id + '/costs'); custo = n(c && c.senders && c.senders[0] && c.senders[0].cost); } catch (_) { /* opcional */ }
+          ship[id] = { status: s.status || '', sub: s.substatus || '', logistica: s.logistic_type || '', rastreio: s.tracking_number || '', custo_frete: custo };
+        } catch (_) { ship[id] = null; }
+      }));
+    }
+    out.forEach((o) => { o.envio = o.envio_id ? ship[o.envio_id] || null : null; });
+    return { pedidos: out, total: (j.paging && j.paging.total) || 0 };
+  }
+  if (op === 'label') {
+    // Etiqueta oficial do ML em PDF (só existe quando o envio está pronto para despachar).
+    const id = String(b.shipment_id || '');
+    if (!/^\d{6,15}$/.test(id)) throw new HttpError(400, 'bad_shipment', 'Envio inválido.');
+    const r = await deps.fetch(API + '/shipment_labels?shipment_ids=' + id + '&response_type=pdf', { headers: { Authorization: 'Bearer ' + token, Accept: 'application/pdf' } });
+    const ct = r.headers.get('content-type') || '';
+    if (!r.ok || ct.indexOf('pdf') < 0) {
+      const j2 = await r.json().catch(() => null);
+      if (r.status === 401) throw new HttpError(401, 'ml_reconnect', 'O Mercado Livre recusou o acesso. Conecte de novo.');
+      throw new HttpError(409, 'label_unavailable', 'A etiqueta ainda não está disponível (' + String((j2 && (j2.message || j2.error)) || r.status).slice(0, 140) + '). Ela sai quando o pedido está pago e pronto para envio.');
+    }
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    if (bytes.length > 3000000) throw new HttpError(502, 'label_big', 'Etiqueta grande demais.');
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    await db.insert('mah_audit', { owner: me.uid, action: 'ml.label', detail: { shipment_id: id } });
+    return { pdf: btoa(bin), nome: 'etiqueta-ml-' + id + '.pdf' };
+  }
+  if (op === 'stock') {
+    // Atualiza o estoque dos anúncios (só depois do [CONFIRMAR] no painel).
+    if (b.confirm !== true) throw new HttpError(400, 'need_confirm', 'Confirme a alteração antes.');
+    const list = (Array.isArray(b.items) ? b.items : []).slice(0, 30);
+    if (!list.length) throw new HttpError(400, 'bad_items', 'Nada para atualizar.');
+    const res = [];
+    for (const it of list) {
+      const id = String((it && it.item_id) || '');
+      const q = Math.floor(Number(it && it.qty));
+      if (!/^MLB\d{6,15}$/.test(id) || !(q >= 0 && q <= 99999)) { res.push({ item_id: id, ok: false, erro: 'Dados inválidos.' }); continue; }
+      const r = await mlRaw(deps, token, '/items/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(q === 0 ? { available_quantity: 0, status: 'paused' } : { available_quantity: q }) });
+      if (r.status === 401) throw new HttpError(401, 'ml_reconnect', 'O Mercado Livre recusou o acesso. Conecte de novo.');
+      res.push({ item_id: id, ok: r.ok, estoque: q, erro: r.ok ? '' : mlCauses(r.j).join(' · ') });
+    }
+    await db.insert('mah_audit', { owner: me.uid, action: 'ml.stock', detail: { itens: res.map((x) => ({ id: x.item_id, q: x.estoque, ok: x.ok })).slice(0, 30) } });
+    return { resultados: res };
+  }
+  if (op === 'notices') {
+    // Quantos pedidos novos o ML avisou desde a última importação.
+    const rows = await db.select('mah_ml_notifications', 'ml_user_id=eq.' + sid + '&processed=eq.false&topic=in.(orders_v2,orders)&select=id&limit=200');
+    if (b.clear === true && rows && rows.length) await db.update('mah_ml_notifications', 'ml_user_id=eq.' + sid + '&processed=eq.false&topic=in.(orders_v2,orders)', { processed: true });
+    return { novos: (rows || []).length };
+  }
+  if (op === 'fees') {
+    // Tarifa real da categoria para a calculadora de margem.
+    const price = Number(b.price);
+    const cid = String(b.category_id || '');
+    if (!(price > 0 && price < 1000000)) throw new HttpError(400, 'bad_price', 'Preço inválido.');
+    let q = '/sites/MLB/listing_prices?price=' + price.toFixed(2);
+    if (/^MLB\d{3,12}$/.test(cid)) q += '&category_id=' + cid;
+    const j = await mlPublic(deps, token, q);
+    const pick = (Array.isArray(j) ? j : []).filter((x) => x && (x.listing_type_id === 'gold_special' || x.listing_type_id === 'gold_pro'));
+    return { tarifas: pick.map((x) => ({ tipo: x.listing_type_id, nome: x.listing_type_name || x.listing_type_id, total: n(x.sale_fee_amount), pct: n(x.sale_fee_details && x.sale_fee_details.percentage_fee), fixa: n(x.sale_fee_details && x.sale_fee_details.fixed_fee) })) };
+  }
   throw new HttpError(400, 'bad_op', 'Operação inválida.');
+}
+
+// Avisos do Mercado Livre (pedido novo, pergunta, envio). Só guarda; o painel lê ao abrir.
+const ML_TOPICS = ['orders_v2', 'orders', 'questions', 'shipments', 'items', 'messages', 'payments', 'claims'];
+async function notification(req, deps) {
+  let b = null;
+  try { b = await req.json(); } catch (_) { b = null; }
+  const ok = b && typeof b.topic === 'string' && typeof b.resource === 'string' && b.resource.length < 300 && ML_TOPICS.indexOf(b.topic) > -1
+    && String(b.application_id || '') === String(deps.env('ML_CLIENT_ID') || '-');
+  if (ok) {
+    try {
+      await rest(deps).insert('mah_ml_notifications', { topic: b.topic, resource: b.resource, ml_user_id: n(b.user_id), attempts: n(b.attempts), sent_at: typeof b.sent === 'string' ? b.sent : null });
+    } catch (_) { /* responde 200 mesmo assim para o ML não desativar o aviso */ }
+  }
+  return new Response('ok', { status: 200, headers: { 'Content-Type': 'text/plain' } });
 }
 
 export async function handle(req, deps) {
@@ -305,6 +393,7 @@ export async function handle(req, deps) {
       return back(tok.refresh_token ? 'ok' : 'sem_renovacao');
     }
     if (req.method !== 'POST') return json(req, 405, { erro: 'Use POST.' });
+    if (/\/notifications$/.test(path)) return await notification(req, deps);
     const me = await requireMember(req, deps);
     rateLimit('ml:' + me.uid, 60, 60000, deps.now());
     if (/\/start$/.test(path)) {
